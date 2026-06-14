@@ -43,14 +43,13 @@ def get_weather(lat, lon):
     )
 
     data = requests.get(url).json()
-
     current = data["current"]
 
-    temp = current["temperature_2m"]
-    humidity = current["relative_humidity_2m"]
-    wind = current["wind_speed_10m"]
-
-    return temp, humidity, wind
+    return (
+        current["temperature_2m"],
+        current["relative_humidity_2m"],
+        current["wind_speed_10m"]
+    )
 
 def analyze_vegetation(image):
     img = np.array(image.convert("RGB"))
@@ -76,6 +75,30 @@ def analyze_vegetation(image):
 
     return green_percent, brown_percent
 
+def detect_water(image):
+    img = np.array(image.convert("RGB"))
+
+    red = img[:, :, 0]
+    green = img[:, :, 1]
+    blue = img[:, :, 2]
+
+    water_pixels = np.sum(
+        (blue > red) &
+        (blue > green)
+    )
+
+    total_pixels = img.shape[0] * img.shape[1]
+
+    return (water_pixels / total_pixels) * 100
+
+def vegetation_density(green_percent):
+    if green_percent > 60:
+        return "Dense"
+    elif green_percent > 30:
+        return "Moderate"
+    else:
+        return "Sparse"
+
 if uploaded_file:
 
     image = Image.open(uploaded_file)
@@ -92,9 +115,9 @@ if uploaded_file:
         st.error("No GPS location found in this image.")
         st.stop()
 
-    gps = exif["GPSInfo"]
-
     try:
+        gps = exif["GPSInfo"]
+
         lat = dms_to_decimal(gps[2], gps[1])
         lon = dms_to_decimal(gps[4], gps[3])
 
@@ -117,9 +140,13 @@ if uploaded_file:
         st.success(f"📍 Photo was taken near: {town}")
 
         green_percent, brown_percent = analyze_vegetation(image)
+        water_percent = detect_water(image)
+        density = vegetation_density(green_percent)
 
         st.write(f"🌿 Green Vegetation: {green_percent:.1f}%")
         st.write(f"🍂 Dry Vegetation: {brown_percent:.1f}%")
+        st.write(f"🌊 Water Detected: {water_percent:.1f}%")
+        st.write(f"🌳 Vegetation Density: {density}")
 
         temp, humidity, wind = get_weather(lat, lon)
 
@@ -145,16 +172,28 @@ if uploaded_file:
         elif wind > 10:
             risk += 1
 
-        # Vegetation
+        # Dry vegetation
         if brown_percent > 20:
             risk += 2
         elif brown_percent > 10:
             risk += 1
 
+        # Green vegetation
         if green_percent > 50:
             risk -= 1
 
-        # Risk level
+        # Dense fuel load
+        if density == "Dense":
+            risk += 1
+
+        # Water protection
+        if water_percent > 15:
+            risk -= 2
+        elif water_percent > 5:
+            risk -= 1
+
+        risk = max(risk, 0)
+
         if risk <= 2:
             level = "LOW"
         elif risk <= 5:
@@ -170,19 +209,18 @@ if uploaded_file:
 
         st.write(
             f"""
-            The photo was taken near **{town}**.
+            📍 Location: {town}
 
-            Current weather conditions:
-            - Temperature: {temp}°C
-            - Humidity: {humidity}%
-            - Wind Speed: {wind} km/h
+            🌡 Temperature: {temp}°C  
+            💧 Humidity: {humidity}%  
+            💨 Wind Speed: {wind} km/h  
 
-            Vegetation detected:
-            - Green Vegetation: {green_percent:.1f}%
-            - Dry Vegetation: {brown_percent:.1f}%
+            🌿 Green Vegetation: {green_percent:.1f}%  
+            🍂 Dry Vegetation: {brown_percent:.1f}%  
+            🌊 Water Detected: {water_percent:.1f}%  
+            🌳 Vegetation Density: {density}
 
-            Based on both the photo and current weather conditions,
-            the estimated wildfire risk is **{level}**.
+            Estimated Wildfire Risk: **{level}**
             """
         )
 
