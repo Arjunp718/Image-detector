@@ -5,12 +5,31 @@ from geopy.geocoders import Nominatim
 import requests
 import numpy as np
 
-st.title("🔥 Wildfire Risk Detector")
+st.set_page_config(page_title="Canada Wildfire Risk AI", page_icon="🔥")
+
+st.title("🔥 Canada Wildfire Risk AI")
+st.write("Upload a GPS-tagged photo to estimate wildfire risk using image analysis and weather data.")
 
 uploaded_file = st.file_uploader(
     "Upload a photo",
     type=["jpg", "jpeg", "png"]
 )
+
+# Historical wildfire hotspot factors
+fire_hotspots = {
+    "British Columbia": 15,
+    "Alberta": 12,
+    "Saskatchewan": 10,
+    "Northwest Territories": 18,
+    "Yukon": 16,
+    "Ontario": 8,
+    "Quebec": 7,
+    "Manitoba": 9,
+    "New Brunswick": 5,
+    "Nova Scotia": 5,
+    "Prince Edward Island": 3,
+    "Newfoundland and Labrador": 4
+}
 
 def get_exif_data(image):
     exif = {}
@@ -43,6 +62,7 @@ def get_weather(lat, lon):
     )
 
     data = requests.get(url).json()
+
     current = data["current"]
 
     return (
@@ -91,40 +111,66 @@ def detect_water(image):
 
     return (water_pixels / total_pixels) * 100
 
+def estimate_ndvi(image):
+    img = np.array(image.convert("RGB"))
+
+    red = img[:, :, 0].astype(float)
+    green = img[:, :, 1].astype(float)
+
+    ndvi = (green - red) / (green + red + 1)
+
+    return float(np.mean(ndvi))
+
 def vegetation_density(green_percent):
-    if green_percent > 60:
+
+    if green_percent > 70:
+        return "Very Dense"
+
+    elif green_percent > 50:
         return "Dense"
+
     elif green_percent > 30:
         return "Moderate"
+
     else:
         return "Sparse"
 
 if uploaded_file:
 
-    image = Image.open(uploaded_file)
-
-    st.image(
-        image,
-        caption="Uploaded Photo",
-        use_container_width=True
-    )
-
-    exif = get_exif_data(image)
-
-    if "GPSInfo" not in exif:
-        st.error("No GPS location found in this image.")
-        st.stop()
-
     try:
+
+        image = Image.open(uploaded_file)
+
+        st.image(
+            image,
+            caption="Uploaded Photo",
+            use_container_width=True
+        )
+
+        exif = get_exif_data(image)
+
+        if "GPSInfo" not in exif:
+            st.error("No GPS location found in this image.")
+            st.stop()
+
         gps = exif["GPSInfo"]
 
         lat = dms_to_decimal(gps[2], gps[1])
         lon = dms_to_decimal(gps[4], gps[3])
 
-        geolocator = Nominatim(user_agent="wildfire_risk_detector")
-        location = geolocator.reverse(f"{lat}, {lon}")
+        geolocator = Nominatim(
+            user_agent="canada_wildfire_ai"
+        )
+
+        location = geolocator.reverse(
+            f"{lat}, {lon}"
+        )
+
+        town = "Unknown"
+        province = "Unknown"
 
         if location:
+
             address = location.raw["address"]
 
             town = (
@@ -134,93 +180,140 @@ if uploaded_file:
                 or address.get("municipality")
                 or "Unknown"
             )
-        else:
-            town = "Unknown"
 
-        st.success(f"📍 Photo was taken near: {town}")
+            province = address.get("state", "Unknown")
+
+        st.success(
+            f"📍 Photo Location: {town}, {province}"
+        )
 
         green_percent, brown_percent = analyze_vegetation(image)
+
         water_percent = detect_water(image)
-        density = vegetation_density(green_percent)
+
+        ndvi = estimate_ndvi(image)
+
+        density = vegetation_density(
+            green_percent
+        )
+
+        st.subheader("🛰 Satellite Analysis")
 
         st.write(f"🌿 Green Vegetation: {green_percent:.1f}%")
         st.write(f"🍂 Dry Vegetation: {brown_percent:.1f}%")
         st.write(f"🌊 Water Detected: {water_percent:.1f}%")
-        st.write(f"🌳 Vegetation Density: {density}")
+        st.write(f"🌳 Forest Density: {density}")
+        st.write(f"🛰 Estimated NDVI: {ndvi:.3f}")
 
-        temp, humidity, wind = get_weather(lat, lon)
+        if water_percent > 20:
+            water_effect = "Strong Natural Fire Barrier"
+        elif water_percent > 10:
+            water_effect = "Moderate Natural Fire Barrier"
+        else:
+            water_effect = "Little Water Protection"
+
+        st.write(f"💧 Water Impact: {water_effect}")
+
+        temp, humidity, wind = get_weather(
+            lat,
+            lon
+        )
+
+        st.subheader("🌤 Weather Conditions")
 
         st.write(f"🌡 Temperature: {temp}°C")
         st.write(f"💧 Humidity: {humidity}%")
         st.write(f"💨 Wind Speed: {wind} km/h")
 
-        risk = 0
+        hotspot_factor = fire_hotspots.get(
+            province,
+            5
+        )
 
-        # Weather
-        if temp > 30:
-            risk += 3
-        elif temp > 25:
-            risk += 2
+        # AI-style wildfire score
 
-        if humidity < 30:
-            risk += 3
-        elif humidity < 50:
-            risk += 1
+        risk_score = 0
 
-        if wind > 20:
-            risk += 2
-        elif wind > 10:
-            risk += 1
+        risk_score += min(temp, 40) / 40 * 30
+        risk_score += (100 - humidity) / 100 * 20
+        risk_score += min(wind, 50) / 50 * 15
+        risk_score += min(brown_percent, 100) / 100 * 15
+        risk_score += min(green_percent, 100) / 100 * 10
 
-        # Dry vegetation
-        if brown_percent > 20:
-            risk += 2
-        elif brown_percent > 10:
-            risk += 1
+        # NDVI contribution
+        if ndvi < 0:
+            risk_score += 10
+        elif ndvi < 0.1:
+            risk_score += 5
 
-        # Green vegetation
-        if green_percent > 50:
-            risk -= 1
-
-        # Dense fuel load
-        if density == "Dense":
-            risk += 1
+        # Historical wildfire factor
+        risk_score += hotspot_factor * 0.5
 
         # Water protection
-        if water_percent > 15:
-            risk -= 2
-        elif water_percent > 5:
-            risk -= 1
+        risk_score -= min(water_percent, 20) / 20 * 10
 
-        risk = max(risk, 0)
+        risk_score = max(
+            0,
+            min(100, risk_score)
+        )
 
-        if risk <= 2:
+        if risk_score < 25:
             level = "LOW"
-        elif risk <= 5:
+
+        elif risk_score < 50:
             level = "MODERATE"
-        elif risk <= 8:
+
+        elif risk_score < 75:
             level = "HIGH"
+
         else:
             level = "EXTREME"
 
-        st.subheader(f"🔥 Fire Risk: {level}")
+        st.subheader("🔥 AI Wildfire Assessment")
 
-        st.markdown("### Wildfire Risk Summary")
+        st.metric(
+            "Wildfire Risk Score",
+            f"{risk_score:.1f}/100"
+        )
+
+        st.metric(
+            "Risk Level",
+            level
+        )
+
+        st.write(
+            f"📚 Historical Fire Factor: {hotspot_factor}"
+        )
+
+        st.markdown("## AI Analysis Summary")
 
         st.write(
             f"""
-            📍 Location: {town}
+            Location: {town}, {province}
 
-            🌡 Temperature: {temp}°C  
-            💧 Humidity: {humidity}%  
-            💨 Wind Speed: {wind} km/h  
+            Temperature: {temp}°C
 
-            🌿 Green Vegetation: {green_percent:.1f}%  
-            🍂 Dry Vegetation: {brown_percent:.1f}%  
-            🌊 Water Detected: {water_percent:.1f}%  
-            🌳 Vegetation Density: {density}
+            Humidity: {humidity}%
 
-            Estimated Wildfire Risk: **{level}**
+            Wind Speed: {wind} km/h
+
+            Green Vegetation: {green_percent:.1f}%
+
+            Dry Vegetation: {brown_percent:.1f}%
+
+            Water Coverage: {water_percent:.1f}%
+
+            Vegetation Density: {density}
+
+            Estimated NDVI: {ndvi:.3f}
+
+            Historical Fire Factor: {hotspot_factor}
+
+            Final Wildfire Risk Score:
+            {risk_score:.1f}/100
+
+            Estimated Wildfire Risk:
+            {level}
             """
         )
 
